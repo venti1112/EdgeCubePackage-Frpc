@@ -23,10 +23,12 @@
 ## 目录结构
 
 ```text
-frplib/frplib.go   frpc 的 c-shared 包装，导出 RunFrpc / StopFrpc
-scripts/build.sh   自动构建脚本：解析 frp 版本、交叉编译、生成 .ecpkg
-go.mod / go.sum    Go 依赖
-dist/              构建产物，已被 git 忽略
+frplib/frplib.go     frpc 的 c-shared 包装，导出 RunFrpc / StopFrpc
+scripts/build.sh     自动构建脚本（Git Bash / Linux / macOS）
+scripts/build.ps1    自动构建脚本（Windows PowerShell）
+scripts/build.bat    自动构建脚本（Windows CMD 包装器）
+go.mod / go.sum      Go 依赖
+dist/                构建产物，已被 git 忽略
 ```
 
 ## 构建
@@ -35,8 +37,10 @@ dist/              构建产物，已被 git 忽略
 
 - Go 1.25+
 - Android NDK，默认路径为 `/d/AndroidSDK/ndk/28.2.13676358`
-- Windows 下请使用 Git Bash 运行
+- Windows 下可使用 Git Bash 或 PowerShell 运行
 - `zip` 命令，或可用的 `python3` / `python` 作为 ZIP 打包后备
+
+### Git Bash / Linux / macOS
 
 ```bash
 # 全部支持的 ABI：arm64-v8a / armeabi-v7a / x86_64
@@ -50,6 +54,29 @@ FRP_VERSION=v0.69.1 ./scripts/build.sh
 
 # 不联网更新，使用 go.mod 已锁定的版本
 FRP_VERSION=keep ./scripts/build.sh
+```
+
+### Windows (PowerShell / CMD)
+
+```powershell
+# 全部支持的 ABI
+.\scripts\build.ps1
+
+# 仅构建某个 ABI
+.\scripts\build.ps1 arm64-v8a
+
+# 构建多个 ABI（使用 -Abis 参数）
+.\scripts\build.ps1 -Abis arm64-v8a,armeabi-v7a,x86_64
+
+# 或使用批处理文件（自动调用 PowerShell）
+.\scripts\build.bat
+.\scripts\build.bat arm64-v8a
+
+# 固定 frp 版本
+$env:FRP_VERSION="v0.69.1"; .\scripts\build.ps1
+
+# 不联网更新
+$env:FRP_VERSION="keep"; .\scripts\build.ps1
 ```
 
 环境变量：
