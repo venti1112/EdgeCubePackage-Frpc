@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 #
-# Build frpc as Android c-shared libraries (libfrpc.so), one per ABI.
+# Build frpc as Android c-shared libraries (libfrpc.so), one per ABI, and
+# package them as EdgeCube .ecpkg runtime packages.
 #
 # It pulls frp as a Go module dependency (latest release by default) and
 # cross-compiles the thin c-shared wrapper in frplib/ against it with the
-# Android NDK. Each ABI is packaged as bin_<arch>.tgz with the layout
+# Android NDK. Each ABI is packaged as <id>-<arch>.ecpkg with the layout
 #
-#     lib/libfrpc.so
-#     version
+#     edgecube-package.json
+#     <arch>/lib/libfrpc.so
 #
-# ready to drop into an Android app's runtime installer (e.g. under
-# assets/runtimes/frpc/).
+# A multi-arch package, <id>-multi.ecpkg, is also produced when more than one
+# supported ABI is built.
 #
 # Why c-shared rather than a standalone executable: the engine is meant to live
 # in the app's writable data directory and be dlopen'd by a tiny native loader
@@ -28,6 +29,11 @@
 #                     no network update).
 #   ANDROID_NDK_HOME  NDK path (default: /d/AndroidSDK/ndk/28.2.13676358).
 #   ANDROID_API       min API level (default: 24).
+#   ECPKG_ID          runtime id in edgecube-package.json (default: frpc).
+#   ECPKG_NAME        display name in edgecube-package.json (default: FRP Client).
+#   ECPKG_AUTHOR      package author (default: EdgeCube).
+#   ECPKG_MIN_APP_VERSION
+#                     minimum EdgeCube versionCode (default: 6).
 #
 # On Windows run it from Git Bash; the NDK .cmd compiler wrappers are selected
 # automatically.
@@ -40,8 +46,112 @@ cd "$ROOT"
 FRP_VERSION="${FRP_VERSION:-latest}"
 ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-/d/AndroidSDK/ndk/28.2.13676358}"
 API="${ANDROID_API:-24}"
+ECPKG_ID="${ECPKG_ID:-frpc}"
+ECPKG_NAME="${ECPKG_NAME:-FRP Client}"
+ECPKG_AUTHOR="${ECPKG_AUTHOR:-EdgeCube}"
+ECPKG_HOMEPAGE="${ECPKG_HOMEPAGE:-https://github.com/fatedier/frp}"
+ECPKG_REPOSITORY="${ECPKG_REPOSITORY:-https://github.com/venti1112/EdgeCubePackage-Frpc}"
+ECPKG_MIN_APP_VERSION="${ECPKG_MIN_APP_VERSION:-6}"
 
 command -v go >/dev/null 2>&1 || { echo "error: go not found in PATH" >&2; exit 1; }
+[[ "$ECPKG_ID" =~ ^[A-Za-z0-9._-]+$ && "$ECPKG_ID" != .* ]] || {
+  echo "error: ECPKG_ID must match ^[A-Za-z0-9._-]+$ and must not start with '.'" >&2
+  exit 1
+}
+[[ "$ECPKG_MIN_APP_VERSION" =~ ^[0-9]+$ ]] || {
+  echo "error: ECPKG_MIN_APP_VERSION must be an integer" >&2
+  exit 1
+}
+
+json_escape() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/\\n}"
+  s="${s//$'\r'/\\r}"
+  printf '%s' "$s"
+}
+
+write_manifest() {
+  local manifest="$1"
+  shift
+  local archs=("$@")
+  local version_json name_json author_json homepage_json repository_json
+  version_json="$(json_escape "$VERSION")"
+  name_json="$(json_escape "$ECPKG_NAME")"
+  author_json="$(json_escape "$ECPKG_AUTHOR")"
+  homepage_json="$(json_escape "$ECPKG_HOMEPAGE")"
+  repository_json="$(json_escape "$ECPKG_REPOSITORY")"
+
+  cat > "$manifest" <<EOF
+{
+  "formatVersion": 1,
+  "type": "frpc",
+  "id": "$ECPKG_ID",
+  "name": "$name_json",
+  "version": "$version_json",
+  "description": "frp client runtime for EdgeCube.",
+  "author": "$author_json",
+  "homepage": "$homepage_json",
+  "repository": "$repository_json",
+  "arch": {
+EOF
+
+  for i in "${!archs[@]}"; do
+    local arch="${archs[$i]}"
+    local comma=","
+    [ "$i" -eq $((${#archs[@]} - 1)) ] && comma=""
+    printf '    "%s": { "dir": "%s" }%s\n' "$arch" "$arch" "$comma" >> "$manifest"
+  done
+
+  cat >> "$manifest" <<EOF
+  },
+  "launcher": {
+    "type": "frpc",
+    "lib": "lib/libfrpc.so"
+  },
+  "minAppVersion": $ECPKG_MIN_APP_VERSION
+}
+EOF
+}
+
+zip_dir() {
+  local src="$1"
+  local dst="$2"
+  rm -f "$dst"
+
+  if command -v zip >/dev/null 2>&1; then
+    (cd "$src" && zip -qr "$dst" edgecube-package.json */)
+    return
+  fi
+
+  local py=""
+  if command -v python3 >/dev/null 2>&1; then
+    py="$(command -v python3)"
+  elif command -v python >/dev/null 2>&1; then
+    py="$(command -v python)"
+  fi
+  [ -n "$py" ] || { echo "error: zip or python is required to create .ecpkg packages" >&2; exit 1; }
+
+  "$py" - "$src" "$dst" <<'PY'
+import os
+import sys
+import zipfile
+
+src, dst = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(dst, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+    for root, dirs, files in os.walk(src):
+        dirs.sort()
+        files.sort()
+        rel_root = os.path.relpath(root, src)
+        if rel_root != ".":
+            zf.write(root, rel_root.replace(os.sep, "/") + "/")
+        for name in files:
+            path = os.path.join(root, name)
+            rel = os.path.relpath(path, src).replace(os.sep, "/")
+            zf.write(path, rel)
+PY
+}
 
 # Select the prebuilt NDK toolchain for this build host. Windows wrappers are .cmd.
 case "$(uname -s)" in
@@ -95,10 +205,14 @@ VERSION="$FRP_VER"
 # ── 2. Cross-compile and package per ABI ───────────────────────────────────
 DIST="$ROOT/dist"
 PKGS="$DIST/packages"
+MULTI_STAGE="$DIST/ecpkg-staging/multi"
 mkdir -p "$PKGS"
+rm -rf "$DIST/ecpkg-staging"
+rm -f "$PKGS"/"${ECPKG_ID}"-*.ecpkg "$PKGS"/bin_*.tgz "$PKGS"/version
 
 ABIS=("$@")
 [ ${#ABIS[@]} -eq 0 ] && ABIS=(arm64-v8a armeabi-v7a x86_64)
+built_archs=()
 
 for abi in "${ABIS[@]}"; do
   armenv=""
@@ -106,7 +220,7 @@ for abi in "${ABIS[@]}"; do
     arm64-v8a)   goarch=arm64; ccname=aarch64-linux-android${API};    pkgarch=arm64 ;;
     armeabi-v7a) goarch=arm;   ccname=armv7a-linux-androideabi${API}; pkgarch=arm;    armenv="GOARM=7" ;;
     x86_64)      goarch=amd64; ccname=x86_64-linux-android${API};      pkgarch=x86_64 ;;
-    x86)         goarch=386;   ccname=i686-linux-android${API};        pkgarch=x86 ;;
+    x86) echo "skip unsupported ecpkg abi: $abi (EdgeCube package spec supports arm64, arm, x86_64)" >&2; continue ;;
     *) echo "skip unknown abi: $abi" >&2; continue ;;
   esac
 
@@ -124,22 +238,34 @@ for abi in "${ABIS[@]}"; do
       -ldflags "-s -w -checklinkname=0" \
       -o "$out/libfrpc.so" ./frplib
 
-  stage="$(mktemp -d)"
-  mkdir -p "$stage/lib"
-  cp "$out/libfrpc.so" "$stage/lib/libfrpc.so"
-  echo "$VERSION" > "$stage/version"
-  tar -C "$stage" -czf "$PKGS/bin_${pkgarch}.tgz" lib version
-  rm -rf "$stage"
+  single_stage="$DIST/ecpkg-staging/$pkgarch"
+  mkdir -p "$single_stage/$pkgarch/lib"
+  cp "$out/libfrpc.so" "$single_stage/$pkgarch/lib/libfrpc.so"
+  write_manifest "$single_stage/edgecube-package.json" "$pkgarch"
+  zip_dir "$single_stage" "$PKGS/${ECPKG_ID}-${pkgarch}.ecpkg"
+
+  mkdir -p "$MULTI_STAGE/$pkgarch/lib"
+  cp "$out/libfrpc.so" "$MULTI_STAGE/$pkgarch/lib/libfrpc.so"
+  if [[ " ${built_archs[*]} " != *" $pkgarch "* ]]; then
+    built_archs+=("$pkgarch")
+  fi
 
   echo "    -> $out/libfrpc.so"
-  echo "    -> $PKGS/bin_${pkgarch}.tgz"
+  echo "    -> $PKGS/${ECPKG_ID}-${pkgarch}.ecpkg"
 done
 
-# Standalone version file, copied alongside the packages so a consumer can
-# compare versions without unpacking a .tgz first.
-echo "$VERSION" > "$PKGS/version"
+if [ ${#built_archs[@]} -eq 0 ]; then
+  echo "error: no supported ABIs were built" >&2
+  exit 1
+fi
+
+if [ ${#built_archs[@]} -gt 1 ]; then
+  write_manifest "$MULTI_STAGE/edgecube-package.json" "${built_archs[@]}"
+  zip_dir "$MULTI_STAGE" "$PKGS/${ECPKG_ID}-multi.ecpkg"
+  echo "    -> $PKGS/${ECPKG_ID}-multi.ecpkg"
+fi
 
 echo ""
 echo "done. frp=$VERSION  ABIs=${ABIS[*]}"
 echo "packages: $PKGS"
-echo "drop bin_<arch>.tgz + version into your Android app's assets/runtimes/frpc/"
+echo "import ${ECPKG_ID}-<arch>.ecpkg or ${ECPKG_ID}-multi.ecpkg from EdgeCube's runtime page."
