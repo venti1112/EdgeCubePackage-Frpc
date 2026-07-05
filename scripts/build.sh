@@ -172,7 +172,7 @@ import sys
 import zipfile
 
 src, dst = sys.argv[1], sys.argv[2]
-with zipfile.ZipFile(dst, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+with zipfile.ZipFile(dst, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
     for root, dirs, files in os.walk(src):
         dirs.sort()
         files.sort()
