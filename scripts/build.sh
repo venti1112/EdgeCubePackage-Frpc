@@ -154,7 +154,7 @@ zip_dir() {
   rm -f "$dst"
 
   if command -v zip >/dev/null 2>&1; then
-    (cd "$src" && zip -qr "$dst" edgecube-package.json */)
+    (cd "$src" && zip -9qr "$dst" edgecube-package.json */)
     return
   fi
 
