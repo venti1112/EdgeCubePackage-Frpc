@@ -54,6 +54,16 @@ $EcpkgAuthor = if ($Env:ECPKG_AUTHOR) { $Env:ECPKG_AUTHOR } else { "EdgeCube" }
 $EcpkgHomepage = if ($Env:ECPKG_HOMEPAGE) { $Env:ECPKG_HOMEPAGE } else { "https://github.com/fatedier/frp" }
 $EcpkgRepository = if ($Env:ECPKG_REPOSITORY) { $Env:ECPKG_REPOSITORY } else { "https://github.com/venti1112/EdgeCubePackage-Frpc" }
 $EcpkgMinAppVersion = if ($Env:ECPKG_MIN_APP_VERSION) { $Env:ECPKG_MIN_APP_VERSION } else { "6" }
+$EcpkgVersion = if ($Env:ECPKG_VERSION) { $Env:ECPKG_VERSION } else { "1" }
+$EcpkgVersionName = if ($Env:ECPKG_VERSION_NAME) { $Env:ECPKG_VERSION_NAME } else { "" }
+$EcpkgUpdateUrl = if ($Env:ECPKG_UPDATE_URL) { $Env:ECPKG_UPDATE_URL } else { "" }
+
+# ecpkg arch dir → lookup key mapping (must match EcPackage.pickArchDir)
+$ArchKeyMap = @{
+    "aarch64" = "aarch64"
+    "arm" = "arm"
+    "x86_64" = "x86_64"
+}
 
 # ── Validation ───────────────────────────────────────────────────────────────
 
@@ -64,6 +74,11 @@ if (-not (Get-Command go -ErrorAction SilentlyContinue)) {
 
 if ($EcpkgId -notmatch '^[A-Za-z0-9._-]+$' -or $EcpkgId.StartsWith('.')) {
     Write-Error "error: ECPKG_ID must match ^[A-Za-z0-9._-]+$ and must not start with '.'"
+    exit 1
+}
+
+if ($EcpkgVersion -notmatch '^[0-9]+$') {
+    Write-Error "error: ECPKG_VERSION must be an integer"
     exit 1
 }
 
@@ -81,30 +96,42 @@ function Write-Manifest {
     )
 
     $VersionJson = $script:Version -replace '\\', '\\' -replace '"', '\"' -replace "`n", '\n' -replace "`r", '\r'
+    $VersionNameJson = if ($script:EcpkgVersionName) { $script:EcpkgVersionName -replace '\\', '\\' -replace '"', '\"' -replace "`n", '\n' -replace "`r", '\r' } else { $VersionJson }
     $NameJson = $script:EcpkgName -replace '\\', '\\' -replace '"', '\"' -replace "`n", '\n' -replace "`r", '\r'
     $AuthorJson = $script:EcpkgAuthor -replace '\\', '\\' -replace '"', '\"' -replace "`n", '\n' -replace "`r", '\r'
     $HomepageJson = $script:EcpkgHomepage -replace '\\', '\\' -replace '"', '\"' -replace "`n", '\n' -replace "`r", '\r'
     $RepositoryJson = $script:EcpkgRepository -replace '\\', '\\' -replace '"', '\"' -replace "`n", '\n' -replace "`r", '\r'
+    $UpdateUrlJson = $script:EcpkgUpdateUrl -replace '\\', '\\' -replace '"', '\"' -replace "`n", '\n' -replace "`r", '\r'
 
     $archEntries = @()
     for ($i = 0; $i -lt $Archs.Count; $i++) {
-        $arch = $Archs[$i]
+        $dir = $Archs[$i]
+        $key = $script:ArchKeyMap[$dir]
         $comma = if ($i -lt $Archs.Count - 1) { "," } else { "" }
-        $archEntries += "    `"$arch`": { `"dir`": `"$arch`" }$comma"
+        $archEntries += "    `"$key`": { `"dir`": `"$dir`" }$comma"
     }
     $archBlock = $archEntries -join "`n"
 
-    $manifest = @"
+    $body = @"
 {
   "formatVersion": 1,
   "type": "frpc",
   "id": "$EcpkgId",
   "name": "$NameJson",
-  "version": "$VersionJson",
+  "version": $EcpkgVersion,
+  "versionName": "$VersionNameJson",
   "description": "frp client runtime for EdgeCube.",
   "author": "$AuthorJson",
   "homepage": "$HomepageJson",
-  "repository": "$RepositoryJson",
+  "repository": "$RepositoryJson"
+"@
+
+    if ($script:EcpkgUpdateUrl) {
+        $body += "`n  `"updateUrl`": `"$UpdateUrlJson`","
+    }
+
+    $body += @"
+,
   "arch": {
 $archBlock
   },
@@ -115,6 +142,7 @@ $archBlock
   "minAppVersion": $EcpkgMinAppVersion
 }
 "@
+    $manifest = $body
 
     Set-Content -Path $ManifestPath -Value $manifest -Encoding UTF8
 }
@@ -266,7 +294,7 @@ foreach ($abi in $Abis) {
         "arm64-v8a" {
             $goarch = "arm64"
             $ccname = "aarch64-linux-android$Api"
-            $pkgarch = "arm64"
+            $pkgarch = "aarch64"
         }
         "armeabi-v7a" {
             $goarch = "arm"
@@ -280,7 +308,7 @@ foreach ($abi in $Abis) {
             $pkgarch = "x86_64"
         }
         "x86" {
-            Write-Warning "skip unsupported ecpkg abi: $abi (EdgeCube package spec supports arm64, arm, x86_64)"
+            Write-Warning "skip unsupported ecpkg abi: $abi (EdgeCube package spec supports aarch64, arm, x86_64)"
             continue
         }
         default {
