@@ -1,0 +1,98 @@
+name: Build FRPC for Android
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Build number (integer)'
+        required: true
+        default: 1
+        type: number
+      version-name:
+        description: 'Display version (e.g., 0.69.1)'
+        required: false
+        type: string
+      ecpkg-id:
+        description: 'Package ID (e.g., frpc)'
+        required: false
+        default: frpc
+        type: string
+      ecpkg-name:
+        description: 'Display name (e.g., FRP Client)'
+        required: false
+        default: 'FRP Client'
+        type: string
+      frp-version:
+        description: 'frp module version (tag; "keep" to pin)'
+        required: false
+        default: latest
+        type: string
+      description:
+        description: 'Package description'
+        required: false
+        type: string
+      author:
+        description: 'Package author'
+        required: false
+        default: 'EdgeCube'
+        type: string
+      homepage:
+        description: 'Homepage URL'
+        required: false
+        default: 'https://github.com/fatedier/frp'
+        type: string
+      repository:
+        description: 'Repository URL'
+        required: false
+        default: 'https://github.com/venti1112/EdgeCubePackage-Frpc'
+        type: string
+      update-url:
+        description: 'Update check URL (optional)'
+        required: false
+        type: string
+      min-app-version:
+        description: 'Minimum EdgeCube app version'
+        required: false
+        default: 6
+        type: number
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: stable
+
+    - name: Set up Android NDK
+      run: |
+        NDK_VERSION=r28
+        wget -q "https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux-x86_64.zip"
+        unzip -q "android-ndk-${NDK_VERSION}-linux-x86_64.zip"
+        echo "ANDROID_NDK_HOME=$PWD/android-ndk-${NDK_VERSION}" >> "$GITHUB_ENV"
+
+    - name: Build and package
+      run: bash scripts/build.sh
+      env:
+        ANDROID_API: 24
+        ECPKG_VERSION: ${{ inputs.version }}
+        ECPKG_VERSION_NAME: ${{ inputs.version-name }}
+        ECPKG_ID: ${{ inputs.ecpkg-id }}
+        ECPKG_NAME: ${{ inputs.ecpkg-name }}
+        ECPKG_DESCRIPTION: ${{ inputs.description }}
+        ECPKG_AUTHOR: ${{ inputs.author }}
+        ECPKG_HOMEPAGE: ${{ inputs.homepage }}
+        ECPKG_REPOSITORY: ${{ inputs.repository }}
+        ECPKG_UPDATE_URL: ${{ inputs.update-url }}
+        ECPKG_MIN_APP_VERSION: ${{ inputs.min-app-version }}
+        FRP_VERSION: ${{ inputs.frp-version }}
+
+    - name: Upload ecpkg packages
+      uses: actions/upload-artifact@v4
+      with:
+        name: frpc-ecpkg
+        path: dist/packages/*.ecpkg
